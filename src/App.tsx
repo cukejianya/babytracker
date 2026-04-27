@@ -1,5 +1,4 @@
 import { useState, useMemo, useEffect } from 'react'
-import { JSONFilePreset } from 'lowdb/node'
 import './App.css'
 import type { JSX } from 'react/jsx-runtime'
 
@@ -23,6 +22,10 @@ interface Totals {
   latestGrowth?: Entry
 }
 
+interface Data {
+  entries: Entry[]
+}
+
 const entryTypeClassMap: Record<EntryType, string> = {
   Feeding: 'entry-badge feeding',
   Elimination: 'entry-badge diaper',
@@ -30,14 +33,8 @@ const entryTypeClassMap: Record<EntryType, string> = {
   Growth: 'entry-badge growth',
 }
 
-type Data = {
-  entries: Entry[]
-}
-
-const defaultData: Data = { entries: [] }
-const db = await JSONFilePreset<Data>('db.json', defaultData)
-
 export default function BabyTrackerApp(): JSX.Element {
+  const [loading, setLoading] = useState<boolean>(true)
   const [feedType, setFeedType] = useState<FeedType>('Bottle')
   const [amount, setAmount] = useState<number>(0)
   const [eliminationType, setEliminationType] = useState<EliminationType>('Pee')
@@ -71,10 +68,27 @@ export default function BabyTrackerApp(): JSX.Element {
     },
   ])
 
-  useEffect(() => { 
-    db.data = { entries };
-    db.write();
-  }, [entries] )
+  useEffect(() => {
+    let getEntries = async () => {
+      try {
+        const response = await fetch('http://localhost:3000/entries');
+        if (!response.ok) {
+          throw new Error(`Response status: ${response.status}`);
+        }
+
+        const data: Data = await response.json();
+        setEntries(data.entries);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    if (loading) {
+      getEntries();
+      setLoading(false)
+    }
+
+  }, [loading]);
 
   const addEntry = (
     type: EntryType,
@@ -94,6 +108,14 @@ export default function BabyTrackerApp(): JSX.Element {
       details,
       note: customNote,
     }
+
+    fetch("http://localhost:3000/entries", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(newEntry),
+    }).then(__ => setLoading(true));
 
     setEntries((prev) => [newEntry, ...prev])
   }
