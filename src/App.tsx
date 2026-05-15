@@ -72,7 +72,7 @@ export default function BabyTrackerApp(): JSX.Element {
   useEffect(() => {
     let getEntries = async () => {
       try {
-        const response = await fetch('http://localhost:3000/entries');
+        const response = await fetch('/api/entries');
         if (!response.ok) {
           throw new Error(`Response status: ${response.status}`);
         }
@@ -110,7 +110,7 @@ export default function BabyTrackerApp(): JSX.Element {
       note: customNote,
     }
 
-    fetch("http://localhost:3000/entries", {
+    fetch("/api/entries", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
