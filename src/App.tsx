@@ -43,6 +43,7 @@ export default function BabyTrackerApp(): JSX.Element {
   const [sleepEnd, setSleepEnd] = useState<string>('')
   const [note, setNote] = useState<string>('')
   const [weight, setWeight] = useState<string>('')
+  const [weightOz, setWeightOz] = useState<string>('')
   const [height, setHeight] = useState<string>('')
   const [entries, setEntries] = useState<Entry[]>([
     {
@@ -144,11 +145,15 @@ export default function BabyTrackerApp(): JSX.Element {
     if (!weight.trim() && !height.trim()) return
 
     const parts: string[] = []
-    if (weight.trim()) parts.push(`Weight: ${weight} lb`)
+    if (weight.trim()) {
+      const ozPart = weightOz.trim() ? ` ${weightOz} oz` : ''
+      parts.push(`Weight: ${weight} lb${ozPart}`)
+    }
     if (height.trim()) parts.push(`Height: ${height} in`)
 
     addEntry('Growth', parts.join(' · '))
     setWeight('')
+    setWeightOz('')
     setHeight('')
   }
 
@@ -321,13 +326,21 @@ export default function BabyTrackerApp(): JSX.Element {
                 <h2>Add growth metrics</h2>
                 <span className="counter">Growth</span>
               </div>
-              <div className="form-grid two-up">
+              <div className="form-grid three-up">
                 <label className="field">
-                  <span>Weight</span>
+                  <span>Weight (lb)</span>
                   <input
                     value={weight}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWeight(e.target.value)}
-                    placeholder="Weight (lb)"
+                    placeholder="lb"
+                  />
+                </label>
+                <label className="field">
+                  <span>Weight (oz)</span>
+                  <input
+                    value={weightOz}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWeightOz(e.target.value)}
+                    placeholder="oz"
                   />
                 </label>
                 <label className="field">
