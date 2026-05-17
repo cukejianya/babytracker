@@ -10,7 +10,7 @@ type EliminationLocation = 'Diaper' | 'Potty' | 'Toilet' | 'Accident' | 'Sink'
 interface Entry {
   id: number
   type: EntryType
-  time: string
+  created_at: string
   details: string
   note: string
 }
@@ -49,21 +49,21 @@ export default function BabyTrackerApp(): JSX.Element {
     {
       id: 1,
       type: 'Feeding',
-      time: '07:30',
+      created_at: '2026-04-16T08:50:22.540Z',
       details: 'Bottle · 4 oz',
       note: 'Finished most of it',
     },
     {
       id: 2,
       type: 'Elimination',
-      time: '09:10',
+      created_at: (new Date()).toJSON(),
       details: 'Diaper · Pee',
       note: '',
     },
     {
       id: 3,
       type: 'Sleep',
-      time: '10:00',
+      created_at: '2026-05-16T08:50:22.540Z',
       details: '10:00 - 11:15',
       note: 'Good nap',
     },
@@ -97,15 +97,12 @@ export default function BabyTrackerApp(): JSX.Element {
     customTime?: string,
     customNote: string = ''
   ): void => {
-    const fallbackTime = new Date().toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    const fallbackTime = new Date().toJSON();
 
     const newEntry: Entry = {
       id: Date.now(),
       type,
-      time: customTime || fallbackTime,
+      created_at: customTime || fallbackTime,
       details,
       note: customNote,
     }
@@ -119,6 +116,24 @@ export default function BabyTrackerApp(): JSX.Element {
     }).then(__ => setLoading(true));
 
     setEntries((prev) => [newEntry, ...prev])
+  }
+
+  const formatDateTime = (date: Date): string => {
+    const P7D = 1000 * 60 * 60 * 24 * 7;
+    const today = new Date();
+    const isToday = today.toDateString() === date.toDateString();
+    const isWithinAWeek = P7D > today.valueOf() - date.valueOf();
+
+    const time = date.toLocaleTimeString('en-us', {hour: 'numeric', minute: 'numeric'});
+
+    const dateString = 
+      isToday 
+        ? 'Today' 
+        : isWithinAWeek
+          ? date.toLocaleDateString('en-us', {weekday: 'short'}) 
+          : date.toLocaleDateString('en-us', {month: 'short', day: 'numeric'})
+    
+    return `${dateString} ${time}`;
   }
 
   const handleAddFeed = (): void => {
@@ -135,7 +150,10 @@ export default function BabyTrackerApp(): JSX.Element {
 
   const handleAddSleep = (): void => {
     if (!sleepStart || !sleepEnd) return
-    addEntry('Sleep', `${sleepStart} - ${sleepEnd}`, sleepStart, note)
+    const [h, m] = sleepStart.split(':')
+    const startDate = new Date()
+    startDate.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0)
+    addEntry('Sleep', `${sleepStart} - ${sleepEnd}`, startDate.toJSON(), note)
     setSleepStart('')
     setSleepEnd('')
     setNote('')
@@ -374,7 +392,7 @@ export default function BabyTrackerApp(): JSX.Element {
                 <article key={entry.id} className="timeline-item">
                   <div className="timeline-topline">
                     <span className={entryTypeClassMap[entry.type]}>{entry.type}</span>
-                    <span className="timeline-time">{entry.time}</span>
+                    <span className="timeline-time">{formatDateTime(new Date(entry.created_at))}</span>
                   </div>
                   <div className="timeline-details">{entry.details}</div>
                   {entry.note ? <div className="timeline-note">{entry.note}</div> : null}
