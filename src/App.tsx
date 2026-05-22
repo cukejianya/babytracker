@@ -33,6 +33,8 @@ const entryTypeClassMap: Record<EntryType, string> = {
   Growth: 'entry-badge growth',
 }
 
+const isSameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString()
+
 export default function BabyTrackerApp(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(true)
   const [feedType, setFeedType] = useState<FeedType>('Bottle')
@@ -45,6 +47,9 @@ export default function BabyTrackerApp(): JSX.Element {
   const [weight, setWeight] = useState<string>('')
   const [weightOz, setWeightOz] = useState<string>('')
   const [height, setHeight] = useState<string>('')
+  const [selectedDate, setSelectedDate] = useState<Date>(() => {
+    const d = new Date(); d.setHours(0, 0, 0, 0); return d
+  })
   const [entries, setEntries] = useState<Entry[]>([
     {
       id: 1,
@@ -136,6 +141,12 @@ export default function BabyTrackerApp(): JSX.Element {
     return `${dateString} ${time}`;
   }
 
+  const goToPrevDay = () =>
+    setSelectedDate(d => { const p = new Date(d); p.setDate(p.getDate() - 1); return p })
+
+  const goToNextDay = () =>
+    setSelectedDate(d => { const n = new Date(d); n.setDate(n.getDate() + 1); return n })
+
   const handleAddFeed = (): void => {
     if (!amount) return
     addEntry('Feeding', `${feedType} · ${amount} oz`)
@@ -175,13 +186,23 @@ export default function BabyTrackerApp(): JSX.Element {
     setHeight('')
   }
 
+  const timelineEntries = useMemo(
+    () => entries.filter(e => isSameDay(new Date(e.created_at), selectedDate)),
+    [entries, selectedDate]
+  )
+
   const totals = useMemo<Totals>(() => {
-    const todayFeeds = entries.filter((e) => e.type === 'Feeding').length
-    const todayEliminations = entries.filter((e) => e.type === 'Elimination').length
-    const todaySleep = entries.filter((e) => e.type === 'Sleep').length
-    const latestGrowth = entries.find((e) => e.type === 'Growth')
+    const todayFeeds        = timelineEntries.filter(e => e.type === 'Feeding').length
+    const todayEliminations = timelineEntries.filter(e => e.type === 'Elimination').length
+    const todaySleep        = timelineEntries.filter(e => e.type === 'Sleep').length
+    const latestGrowth      = timelineEntries.find(e => e.type === 'Growth')
     return { todayFeeds, todayEliminations, todaySleep, latestGrowth }
-  }, [entries])
+  }, [timelineEntries])
+
+  const isViewingToday = isSameDay(selectedDate, new Date())
+  const timelineLabel = isViewingToday
+    ? "Today's timeline"
+    : selectedDate.toLocaleDateString('en-us', { weekday: 'long', month: 'short', day: 'numeric' })
 
   return (
     <div className="app-shell">
@@ -379,25 +400,32 @@ export default function BabyTrackerApp(): JSX.Element {
           <aside className="tracker-card timeline-card">
             <div className="timeline-header">
               <div>
-                <h2>Today’s timeline</h2>
+                <h2>{timelineLabel}</h2>
                 <p className="timeline-subtitle">A quick view of the day so far.</p>
               </div>
-              <span className="counter">{entries.length} entries</span>
+              <div className="timeline-nav">
+                <button onClick={goToPrevDay} className="nav-button" aria-label="Previous day">‹</button>
+                <span className="counter">{timelineEntries.length} entries</span>
+                <button onClick={goToNextDay} className="nav-button" disabled={isViewingToday} aria-label="Next day">›</button>
+              </div>
             </div>
 
             <div className="ticks" />
 
             <div className="timeline-list">
-              {entries.map((entry) => (
-                <article key={entry.id} className="timeline-item">
-                  <div className="timeline-topline">
-                    <span className={entryTypeClassMap[entry.type]}>{entry.type}</span>
-                    <span className="timeline-time">{formatDateTime(new Date(entry.created_at))}</span>
-                  </div>
-                  <div className="timeline-details">{entry.details}</div>
-                  {entry.note ? <div className="timeline-note">{entry.note}</div> : null}
-                </article>
-              ))}
+              {timelineEntries.length === 0
+                ? <p className="timeline-empty">No entries for this day.</p>
+                : timelineEntries.map((entry) => (
+                  <article key={entry.id} className="timeline-item">
+                    <div className="timeline-topline">
+                      <span className={entryTypeClassMap[entry.type]}>{entry.type}</span>
+                      <span className="timeline-time">{formatDateTime(new Date(entry.created_at))}</span>
+                    </div>
+                    <div className="timeline-details">{entry.details}</div>
+                    {entry.note ? <div className="timeline-note">{entry.note}</div> : null}
+                  </article>
+                ))
+              }
             </div>
           </aside>
         </div>
