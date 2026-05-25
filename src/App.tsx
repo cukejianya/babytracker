@@ -1,11 +1,10 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import './App.css'
 import type { JSX } from 'react/jsx-runtime'
 
-type EntryType = 'Feeding' | 'Elimination' | 'Sleep' | 'Growth'
+type EntryType = 'Feeding' | 'Potty' | 'Sleep' | 'Growth'
 type FeedType = 'Bottle' | 'Breastfeeding' | 'Formula' | 'Solid Food'
-type EliminationType = 'Pee' | 'Poop' | 'Both'
-type EliminationLocation = 'Diaper' | 'Potty' | 'Toilet' | 'Accident' | 'Sink'
+type PottyType = 'Wet' | 'Dirty' | 'Both' | 'Blowout' | 'Catch'
 
 interface Entry {
   id: number
@@ -15,422 +14,640 @@ interface Entry {
   note: string
 }
 
-interface Totals {
-  todayFeeds: number
-  todayEliminations: number
-  todaySleep: number
-  latestGrowth?: Entry
-}
-
 interface Data {
   entries: Entry[]
 }
 
+const FEED_TYPES: FeedType[] = ['Bottle', 'Breastfeeding', 'Formula', 'Solid Food']
+const FEED_AMOUNTS = [2, 4, 6, 8] as const
+const POTTY_TYPES: PottyType[] = ['Wet', 'Dirty', 'Both', 'Blowout', 'Catch']
+const CATCH_LOCATIONS = ['Toilet', 'Potty seat', 'Sink', 'Other']
+
 const entryTypeClassMap: Record<EntryType, string> = {
   Feeding: 'entry-badge feeding',
-  Elimination: 'entry-badge diaper',
-  Sleep: 'entry-badge sleep',
-  Growth: 'entry-badge growth',
+  Potty:   'entry-badge diaper',
+  Sleep:   'entry-badge sleep',
+  Growth:  'entry-badge growth',
 }
 
 const isSameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString()
 
+const timeAgo = (date: Date): string => {
+  const diffMs = Date.now() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+  if (diffMins < 1) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  const h = Math.floor(diffMins / 60)
+  const m = diffMins % 60
+  return m === 0 ? `${h}h ago` : `${h}h ${m}m ago`
+}
+
+const formatDuration = (startMs: number, endMs: number): string => {
+  const diffMins = Math.max(0, Math.floor((endMs - startMs) / 60000))
+  const h = Math.floor(diffMins / 60)
+  const m = diffMins % 60
+  if (h === 0) return `${m}m`
+  return m === 0 ? `${h}h` : `${h}h ${m}m`
+}
+
 export default function BabyTrackerApp(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(true)
-  const [feedType, setFeedType] = useState<FeedType>('Bottle')
-  const [amount, setAmount] = useState<number>(0)
-  const [eliminationType, setEliminationType] = useState<EliminationType>('Pee')
-  const [eliminationLocation, setEliminationLocation] = useState<EliminationLocation>('Diaper')
-  const [sleepStart, setSleepStart] = useState<string>('')
-  const [sleepEnd, setSleepEnd] = useState<string>('')
-  const [note, setNote] = useState<string>('')
-  const [weight, setWeight] = useState<string>('')
-  const [weightOz, setWeightOz] = useState<string>('')
-  const [height, setHeight] = useState<string>('')
+  const [entries, setEntries] = useState<Entry[]>([
+    { id: 1, type: 'Feeding', created_at: '2026-04-16T08:50:22.540Z', details: 'Bottle · 4 oz', note: 'Finished most of it' },
+    { id: 2, type: 'Potty',   created_at: (new Date()).toJSON(),         details: 'Wet',           note: '' },
+    { id: 3, type: 'Sleep',   created_at: '2026-05-16T08:50:22.540Z',   details: '10:00 – 11:15 · 1h 15m', note: 'Good nap' },
+  ])
   const [selectedDate, setSelectedDate] = useState<Date>(() => {
     const d = new Date(); d.setHours(0, 0, 0, 0); return d
   })
-  const [entries, setEntries] = useState<Entry[]>([
-    {
-      id: 1,
-      type: 'Feeding',
-      created_at: '2026-04-16T08:50:22.540Z',
-      details: 'Bottle · 4 oz',
-      note: 'Finished most of it',
-    },
-    {
-      id: 2,
-      type: 'Elimination',
-      created_at: (new Date()).toJSON(),
-      details: 'Diaper · Pee',
-      note: '',
-    },
-    {
-      id: 3,
-      type: 'Sleep',
-      created_at: '2026-05-16T08:50:22.540Z',
-      details: '10:00 - 11:15',
-      note: 'Good nap',
-    },
-  ])
+  const [tick, setTick] = useState(0)
+  const [activeModal, setActiveModal] = useState<EntryType | null>(null)
+  const [activeSleepStart, setActiveSleepStart] = useState<string | null>(
+    () => localStorage.getItem('activeSleepStart')
+  )
 
+  // Feed form
+  const [feedType, setFeedType]               = useState<FeedType>('Bottle')
+  const [feedAmount, setFeedAmount]           = useState<number>(4)
+  const [feedAmountCustom, setFeedAmountCustom] = useState<string>('')
+  const [feedNote, setFeedNote]               = useState<string>('')
+  const [feedShowNote, setFeedShowNote]       = useState<boolean>(false)
+
+  // Potty form
+  const [pottyType, setPottyType]           = useState<PottyType | null>(null)
+  const [pottyLocation, setPottyLocation]   = useState<string>('Toilet')
+  const [pottyNote, setPottyNote]           = useState<string>('')
+  const [pottyShowNote, setPottyShowNote]   = useState<boolean>(false)
+
+  // Sleep form
+  const [sleepNote, setSleepNote]           = useState<string>('')
+  const [sleepShowNote, setSleepShowNote]   = useState<boolean>(false)
+  const [manualSleepStart, setManualSleepStart] = useState<string>('')
+  const [manualSleepEnd, setManualSleepEnd]     = useState<string>('')
+  const [showManualSleep, setShowManualSleep]   = useState<boolean>(false)
+
+  // Growth form
+  const [weight, setWeight]     = useState<string>('')
+  const [weightOz, setWeightOz] = useState<string>('')
+  const [height, setHeight]     = useState<string>('')
+
+  // Live timer tick (every 30s)
   useEffect(() => {
-    let getEntries = async () => {
-      try {
-        const response = await fetch('/api/entries');
-        if (!response.ok) {
-          throw new Error(`Response status: ${response.status}`);
-        }
+    const id = setInterval(() => setTick(t => t + 1), 30000)
+    return () => clearInterval(id)
+  }, [])
 
-        const data: Data = await response.json();
-        setEntries(data.entries);
+  // API fetch
+  useEffect(() => {
+    if (!loading) return
+    const fetchEntries = async () => {
+      try {
+        const response = await fetch('/api/entries')
+        if (!response.ok) throw new Error(`Response status: ${response.status}`)
+        const data: Data = await response.json()
+        setEntries(data.entries)
       } catch (e) {
-        console.error(e);
+        console.error(e)
       }
     }
+    fetchEntries()
+    setLoading(false)
+  }, [loading])
 
-    if (loading) {
-      getEntries();
-      setLoading(false)
-    }
-
-  }, [loading]);
-
-  const addEntry = (
+  const addEntry = useCallback((
     type: EntryType,
     details: string,
     customTime?: string,
     customNote: string = ''
   ): void => {
-    const fallbackTime = new Date().toJSON();
-
     const newEntry: Entry = {
       id: Date.now(),
       type,
-      created_at: customTime || fallbackTime,
+      created_at: customTime ?? new Date().toJSON(),
       details,
       note: customNote,
     }
-
-    fetch("/api/entries", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+    fetch('/api/entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newEntry),
-    }).then(__ => setLoading(true));
+    }).then(() => setLoading(true))
+    setEntries(prev => [newEntry, ...prev])
+  }, [])
 
-    setEntries((prev) => [newEntry, ...prev])
-  }
+  const openModal = useCallback((type: EntryType) => {
+    setFeedShowNote(false)
+    setFeedNote('')
+    setFeedAmount(4)
+    setFeedAmountCustom('')
+    setPottyType(null)
+    setPottyShowNote(false)
+    setPottyNote('')
+    setSleepShowNote(false)
+    setShowManualSleep(false)
+    setActiveModal(type)
+  }, [])
 
-  const formatDateTime = (date: Date): string => {
-    const P7D = 1000 * 60 * 60 * 24 * 7;
-    const today = new Date();
-    const isToday = today.toDateString() === date.toDateString();
-    const isWithinAWeek = P7D > today.valueOf() - date.valueOf();
-
-    const time = date.toLocaleTimeString('en-us', {hour: 'numeric', minute: 'numeric'});
-
-    const dateString = 
-      isToday 
-        ? 'Today' 
-        : isWithinAWeek
-          ? date.toLocaleDateString('en-us', {weekday: 'short'}) 
-          : date.toLocaleDateString('en-us', {month: 'short', day: 'numeric'})
-    
-    return `${dateString} ${time}`;
-  }
-
-  const goToPrevDay = () =>
-    setSelectedDate(d => { const p = new Date(d); p.setDate(p.getDate() - 1); return p })
-
-  const goToNextDay = () =>
-    setSelectedDate(d => { const n = new Date(d); n.setDate(n.getDate() + 1); return n })
+  const closeModal = useCallback(() => {
+    setActiveModal(null)
+    setPottyType(null)
+    setShowManualSleep(false)
+  }, [])
 
   const handleAddFeed = (): void => {
-    if (!amount) return
-    addEntry('Feeding', `${feedType} · ${amount} oz`)
-    setAmount(0)
-    setNote('')
+    const needsAmount = feedType === 'Bottle' || feedType === 'Formula'
+    const actualAmount = feedAmount === -1 ? parseFloat(feedAmountCustom) : feedAmount
+    if (needsAmount && !actualAmount) return
+    const parts: string[] = [feedType]
+    if (needsAmount && actualAmount) parts.push(`${actualAmount} oz`)
+    addEntry('Feeding', parts.join(' · '), undefined, feedNote.trim())
+    closeModal()
   }
 
-  const handleAddElimination = (): void => {
-    addEntry('Elimination', `${eliminationLocation} · ${eliminationType}`, undefined, note)
-    setNote('')
+  const handleStartSleep = (): void => {
+    const now = new Date().toJSON()
+    setActiveSleepStart(now)
+    localStorage.setItem('activeSleepStart', now)
+    closeModal()
   }
 
-  const handleAddSleep = (): void => {
-    if (!sleepStart || !sleepEnd) return
-    const [h, m] = sleepStart.split(':')
+  const handleEndSleep = useCallback((): void => {
+    if (!activeSleepStart) return
+    const startDate = new Date(activeSleepStart)
+    const endDate = new Date()
+    const fmt = (d: Date) => d.toLocaleTimeString('en-us', { hour: 'numeric', minute: '2-digit' })
+    const duration = formatDuration(startDate.getTime(), endDate.getTime())
+    addEntry('Sleep', `${fmt(startDate)} – ${fmt(endDate)} · ${duration}`, activeSleepStart, sleepNote.trim())
+    setActiveSleepStart(null)
+    localStorage.removeItem('activeSleepStart')
+    setSleepNote('')
+    closeModal()
+  }, [activeSleepStart, sleepNote, addEntry, closeModal])
+
+  const handleManualSleep = (): void => {
+    if (!manualSleepStart || !manualSleepEnd) return
+    const [sh, sm] = manualSleepStart.split(':').map(Number)
+    const [eh, em] = manualSleepEnd.split(':').map(Number)
     const startDate = new Date()
-    startDate.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0)
-    addEntry('Sleep', `${sleepStart} - ${sleepEnd}`, startDate.toJSON(), note)
-    setSleepStart('')
-    setSleepEnd('')
-    setNote('')
+    startDate.setHours(sh, sm, 0, 0)
+    const endDate = new Date()
+    endDate.setHours(eh, em, 0, 0)
+    if (endDate <= startDate) return
+    const duration = formatDuration(startDate.getTime(), endDate.getTime())
+    addEntry('Sleep', `${manualSleepStart} – ${manualSleepEnd} · ${duration}`, startDate.toJSON(), sleepNote.trim())
+    setManualSleepStart('')
+    setManualSleepEnd('')
+    setSleepNote('')
+    closeModal()
   }
 
   const handleSaveMetrics = (): void => {
     if (!weight.trim() && !height.trim()) return
-
     const parts: string[] = []
     if (weight.trim()) {
       const ozPart = weightOz.trim() ? ` ${weightOz} oz` : ''
       parts.push(`Weight: ${weight} lb${ozPart}`)
     }
     if (height.trim()) parts.push(`Height: ${height} in`)
-
     addEntry('Growth', parts.join(' · '))
     setWeight('')
     setWeightOz('')
     setHeight('')
+    closeModal()
   }
 
-  const timelineEntries = useMemo(
-    () => entries.filter(e => isSameDay(new Date(e.created_at), selectedDate)),
-    [entries, selectedDate]
+  const sortedEntries = useMemo(
+    () => [...entries].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [entries]
   )
 
-  const totals = useMemo<Totals>(() => {
-    const todayFeeds        = timelineEntries.filter(e => e.type === 'Feeding').length
-    const todayEliminations = timelineEntries.filter(e => e.type === 'Elimination').length
-    const todaySleep        = timelineEntries.filter(e => e.type === 'Sleep').length
-    const latestGrowth      = timelineEntries.find(e => e.type === 'Growth')
-    return { todayFeeds, todayEliminations, todaySleep, latestGrowth }
-  }, [timelineEntries])
+  const lastFeedEntry  = useMemo(() => sortedEntries.find(e => e.type === 'Feeding'), [sortedEntries])
+  const lastPottyEntry = useMemo(() => sortedEntries.find(e => e.type === 'Potty'),   [sortedEntries])
+  const lastSleepEntry = useMemo(() => sortedEntries.find(e => e.type === 'Sleep'),   [sortedEntries])
+
+  const sleepActiveLabel = useMemo(
+    () => activeSleepStart ? formatDuration(new Date(activeSleepStart).getTime(), Date.now()) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSleepStart, tick]
+  )
+
+  const todayNaps = useMemo(() => {
+    const today = new Date()
+    return entries.filter(e => e.type === 'Sleep' && isSameDay(new Date(e.created_at), today)).length
+  }, [entries])
+
+  const timelineEntries = useMemo(
+    () => sortedEntries.filter(e => isSameDay(new Date(e.created_at), selectedDate)),
+    [sortedEntries, selectedDate]
+  )
+
+  const goToPrevDay = () =>
+    setSelectedDate(d => { const p = new Date(d); p.setDate(p.getDate() - 1); return p })
+  const goToNextDay = () =>
+    setSelectedDate(d => { const n = new Date(d); n.setDate(n.getDate() + 1); return n })
 
   const isViewingToday = isSameDay(selectedDate, new Date())
   const timelineLabel = isViewingToday
     ? "Today's timeline"
     : selectedDate.toLocaleDateString('en-us', { weekday: 'long', month: 'short', day: 'numeric' })
 
+  const formatDateTime = (date: Date): string => {
+    const P7D = 1000 * 60 * 60 * 24 * 7
+    const today = new Date()
+    const isToday = today.toDateString() === date.toDateString()
+    const isWithinAWeek = P7D > today.valueOf() - date.valueOf()
+    const time = date.toLocaleTimeString('en-us', { hour: 'numeric', minute: 'numeric' })
+    const dateStr = isToday
+      ? 'Today'
+      : isWithinAWeek
+        ? date.toLocaleDateString('en-us', { weekday: 'short' })
+        : date.toLocaleDateString('en-us', { month: 'short', day: 'numeric' })
+    return `${dateStr} ${time}`
+  }
+
+  const feedNeedsAmount  = feedType === 'Bottle' || feedType === 'Formula'
+  const feedSaveDisabled = feedNeedsAmount && feedAmount === -1 && !feedAmountCustom.trim()
+
   return (
     <div className="app-shell">
       <div className="app-frame">
-        <header className="tracker-hero">
-          <div className="hero-copy">
-            <div className="hero-kicker">Daily care dashboard</div>
-            <h1>Baby Tracker</h1>
-            <p>
-              Log feedings, diaper changes, naps, and growth updates in a calmer,
-              more readable layout.
-            </p>
-          </div>
 
-          <div className="hero metrics-grid">
-            <div className="metric-card">
-              <span className="metric-label">Feeds</span>
-              <strong className="metric-value">{totals.todayFeeds}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">Eliminations</span>
-              <strong className="metric-value">{totals.todayEliminations}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">Naps</span>
-              <strong className="metric-value">{totals.todaySleep}</strong>
-            </div>
-            <div className="metric-card metric-card-wide">
-              <span className="metric-label">Latest growth</span>
-              <strong className="metric-value metric-value-small">
-                {totals.latestGrowth ? totals.latestGrowth.details : 'No data yet'}
-              </strong>
-            </div>
-          </div>
+        {/* Header */}
+        <header className="tracker-header">
+          <div className="hero-kicker">Daily care dashboard</div>
+          <h1>Baby Tracker</h1>
         </header>
 
-        <div className="content-grid">
-          <section className="form-column">
-            <article className="tracker-card">
-              <div className="section-heading">
-                <h2>Add feeding</h2>
-                <span className="counter">Nutrition</span>
-              </div>
-              <div className="form-grid two-up">
-                <label className="field">
-                  <span>Type</span>
-                  <select
-                    value={feedType}
-                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-                      setFeedType(e.target.value as FeedType)
-                    }
-                  >
-                    <option>Bottle</option>
-                    <option>Breastfeeding</option>
-                    <option>Formula</option>
-                    <option>Solid Food</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Amount</span>
-                  <input
-                    value={amount}
-                    type='number'
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAmount(e.target.valueAsNumber)}
-                    placeholder="Amount (oz)"
-                  />
-                </label>
-              </div>
-              <button onClick={handleAddFeed} className="action-button">
-                Save feeding
-              </button>
-            </article>
+        {/* Status Card */}
+        <section className="status-card">
+          <div className="status-item">
+            <span className="status-label">Last fed</span>
+            <span className="status-value">
+              {lastFeedEntry ? timeAgo(new Date(lastFeedEntry.created_at)) : 'No feeds yet'}
+            </span>
+          </div>
+          <div className="status-item">
+            <span className="status-label">Last potty</span>
+            <span className="status-value">
+              {lastPottyEntry ? timeAgo(new Date(lastPottyEntry.created_at)) : 'No entries yet'}
+            </span>
+          </div>
+          <div className="status-item">
+            <span className="status-label">Sleep</span>
+            <span className={`status-value${activeSleepStart ? ' status-sleeping' : ''}`}>
+              {activeSleepStart
+                ? `Sleeping · ${sleepActiveLabel}`
+                : lastSleepEntry
+                  ? `Last: ${timeAgo(new Date(lastSleepEntry.created_at))}`
+                  : 'No sleep logged'}
+            </span>
+          </div>
+          <div className="status-item">
+            <span className="status-label">Naps today</span>
+            <span className="status-value">{todayNaps}</span>
+          </div>
+        </section>
 
-            <article className="tracker-card">
-              <div className="section-heading">
-                <h2>Add elimination change</h2>
-                <span className="counter">Care</span>
-              </div>
-              <div className="form-grid two-up">
-                <label className="field">
-                  <span>Change type</span>
-                  <select
-                    value={eliminationType}
-                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-                      setEliminationType(e.target.value as EliminationType)
-                    }
-                  >
-                    <option>Pee</option>
-                    <option>Poop</option>
-                    <option>Both</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Where type</span>
-                  <select
-                    value={eliminationLocation}
-                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-                      setEliminationLocation(e.target.value as EliminationLocation)
-                    }
-                  >
-                    <option>Diaper</option>
-                    <option>Potty</option>
-                    <option>Toilet</option>
-                    <option>Accident</option>
-                    <option>Sink</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Note</span>
-                  <input
-                    value={note}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNote(e.target.value)}
-                    placeholder="Optional note"
-                  />
-                </label>
-              </div>
-              <button onClick={handleAddElimination} className="action-button">
-                Save elimniation change
-              </button>
-            </article>
+        {/* Quick Actions */}
+        <section className="quick-actions">
+          <button className="quick-action-btn quick-action-feed" onClick={() => openModal('Feeding')}>
+            Feed
+          </button>
+          <button className="quick-action-btn quick-action-potty" onClick={() => openModal('Potty')}>
+            Potty
+          </button>
+          <button
+            className={`quick-action-btn quick-action-sleep${activeSleepStart ? ' is-active' : ''}`}
+            onClick={() => openModal('Sleep')}
+          >
+            {activeSleepStart ? 'Sleeping' : 'Sleep'}
+          </button>
+          <button className="quick-action-btn quick-action-growth" onClick={() => openModal('Growth')}>
+            Growth
+          </button>
+        </section>
 
-            <article className="tracker-card">
-              <div className="section-heading">
-                <h2>Add sleep</h2>
-                <span className="counter">Rest</span>
-              </div>
-              <div className="form-grid three-up">
-                <label className="field">
-                  <span>Start</span>
-                  <input
-                    type="time"
-                    value={sleepStart}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSleepStart(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span>End</span>
-                  <input
-                    type="time"
-                    value={sleepEnd}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSleepEnd(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span>Note</span>
-                  <input
-                    value={note}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNote(e.target.value)}
-                    placeholder="Optional note"
-                  />
-                </label>
-              </div>
-              <button onClick={handleAddSleep} className="action-button">
-                Save sleep
-              </button>
-            </article>
-
-            <article className="tracker-card">
-              <div className="section-heading">
-                <h2>Add growth metrics</h2>
-                <span className="counter">Growth</span>
-              </div>
-              <div className="form-grid three-up">
-                <label className="field">
-                  <span>Weight (lb)</span>
-                  <input
-                    value={weight}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWeight(e.target.value)}
-                    placeholder="lb"
-                  />
-                </label>
-                <label className="field">
-                  <span>Weight (oz)</span>
-                  <input
-                    value={weightOz}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWeightOz(e.target.value)}
-                    placeholder="oz"
-                  />
-                </label>
-                <label className="field">
-                  <span>Height</span>
-                  <input
-                    value={height}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setHeight(e.target.value)}
-                    placeholder="Height (in)"
-                  />
-                </label>
-              </div>
-              <button onClick={handleSaveMetrics} className="action-button">
-                Save metrics
-              </button>
-            </article>
-          </section>
-
-          <aside className="tracker-card timeline-card">
-            <div className="timeline-header">
+        {/* Active sleep bar */}
+        {activeSleepStart && (
+          <section className="sleep-active-bar">
+            <div className="sleep-active-info">
+              <div className="sleep-dot" />
               <div>
-                <h2>{timelineLabel}</h2>
-                <p className="timeline-subtitle">A quick view of the day so far.</p>
-              </div>
-              <div className="timeline-nav">
-                <button onClick={goToPrevDay} className="nav-button" aria-label="Previous day">‹</button>
-                <span className="counter">{timelineEntries.length} entries</span>
-                <button onClick={goToNextDay} className="nav-button" disabled={isViewingToday} aria-label="Next day">›</button>
+                <div className="sleep-active-label">Baby is sleeping</div>
+                <div className="sleep-active-duration">{sleepActiveLabel}</div>
               </div>
             </div>
+            <button className="end-sleep-btn" onClick={handleEndSleep}>End sleep</button>
+          </section>
+        )}
 
-            <div className="ticks" />
-
-            <div className="timeline-list">
-              {timelineEntries.length === 0
-                ? <p className="timeline-empty">No entries for this day.</p>
-                : timelineEntries.map((entry) => (
-                  <article key={entry.id} className="timeline-item">
-                    <div className="timeline-topline">
-                      <span className={entryTypeClassMap[entry.type]}>{entry.type}</span>
-                      <span className="timeline-time">{formatDateTime(new Date(entry.created_at))}</span>
-                    </div>
-                    <div className="timeline-details">{entry.details}</div>
-                    {entry.note ? <div className="timeline-note">{entry.note}</div> : null}
-                  </article>
-                ))
-              }
+        {/* Timeline */}
+        <aside className="tracker-card timeline-card">
+          <div className="timeline-header">
+            <div>
+              <h2>{timelineLabel}</h2>
+              <p className="timeline-subtitle">A quick view of the day so far.</p>
             </div>
-          </aside>
-        </div>
+            <div className="timeline-nav">
+              <button onClick={goToPrevDay} className="nav-button" aria-label="Previous day">‹</button>
+              <span className="counter">{timelineEntries.length} entries</span>
+              <button onClick={goToNextDay} className="nav-button" disabled={isViewingToday} aria-label="Next day">›</button>
+            </div>
+          </div>
+
+          <div className="ticks" />
+
+          <div className="timeline-list">
+            {timelineEntries.length === 0
+              ? <p className="timeline-empty">No entries for this day.</p>
+              : timelineEntries.map(entry => (
+                <article key={entry.id} className="timeline-item">
+                  <div className="timeline-topline">
+                    <span className={entryTypeClassMap[entry.type]}>{entry.type}</span>
+                    <span className="timeline-time">{formatDateTime(new Date(entry.created_at))}</span>
+                  </div>
+                  <div className="timeline-details">{entry.details}</div>
+                  {entry.note ? <div className="timeline-note">{entry.note}</div> : null}
+                </article>
+              ))
+            }
+          </div>
+        </aside>
+
+        {/* Modal */}
+        {activeModal !== null && (
+          <div className="modal-overlay" onClick={closeModal}>
+            <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>
+                  {activeModal === 'Feeding' && 'Log feeding'}
+                  {activeModal === 'Potty'   && 'Log potty'}
+                  {activeModal === 'Sleep'   && (activeSleepStart ? 'Sleep timer' : 'Log sleep')}
+                  {activeModal === 'Growth'  && 'Log growth'}
+                </h2>
+                <button className="modal-close" onClick={closeModal} aria-label="Close">✕</button>
+              </div>
+
+              {/* ── Feed modal ── */}
+              {activeModal === 'Feeding' && (
+                <div className="modal-body">
+                  <span className="chip-label">Type</span>
+                  <div className="chip-group">
+                    {FEED_TYPES.map(t => (
+                      <button
+                        key={t}
+                        className={`chip${feedType === t ? ' selected' : ''}`}
+                        onClick={() => { setFeedType(t); setFeedAmount(4); setFeedAmountCustom('') }}
+                      >{t}</button>
+                    ))}
+                  </div>
+
+                  {feedNeedsAmount && (
+                    <>
+                      <span className="chip-label">Amount</span>
+                      <div className="chip-group amount-chips">
+                        {FEED_AMOUNTS.map(oz => (
+                          <button
+                            key={oz}
+                            className={`chip${feedAmount === oz ? ' selected' : ''}`}
+                            onClick={() => { setFeedAmount(oz); setFeedAmountCustom('') }}
+                          >{oz} oz</button>
+                        ))}
+                        <button
+                          className={`chip${feedAmount === -1 ? ' selected' : ''}`}
+                          onClick={() => setFeedAmount(-1)}
+                        >Custom</button>
+                      </div>
+                      {feedAmount === -1 && (
+                        <input
+                          className="modal-input"
+                          type="number"
+                          placeholder="Amount (oz)"
+                          value={feedAmountCustom}
+                          onChange={e => setFeedAmountCustom(e.target.value)}
+                          min="0"
+                          step="0.5"
+                        />
+                      )}
+                    </>
+                  )}
+
+                  {feedShowNote
+                    ? <input
+                        className="modal-input"
+                        placeholder="Add a note..."
+                        value={feedNote}
+                        onChange={e => setFeedNote(e.target.value)}
+                      />
+                    : <button className="expand-toggle" onClick={() => setFeedShowNote(true)}>
+                        Add note
+                      </button>
+                  }
+
+                  <button
+                    className="action-button modal-save"
+                    onClick={handleAddFeed}
+                    disabled={feedSaveDisabled}
+                  >
+                    Save feeding
+                  </button>
+                </div>
+              )}
+
+              {/* ── Potty modal ── */}
+              {activeModal === 'Potty' && (
+                <div className="modal-body">
+                  <span className="chip-label">What happened?</span>
+                  <div className="chip-group potty-chips">
+                    {POTTY_TYPES.map(t => (
+                      <button
+                        key={t}
+                        className={`chip${pottyType === t ? ' selected' : ''}`}
+                        onClick={() => {
+                          setPottyType(t)
+                          if (t !== 'Catch') {
+                            addEntry('Potty', t)
+                            closeModal()
+                          }
+                        }}
+                      >{t}</button>
+                    ))}
+                  </div>
+
+                  {pottyType === 'Catch' && (
+                    <>
+                      <span className="chip-label">Where?</span>
+                      <div className="chip-group">
+                        {CATCH_LOCATIONS.map(loc => (
+                          <button
+                            key={loc}
+                            className={`chip${pottyLocation === loc ? ' selected' : ''}`}
+                            onClick={() => setPottyLocation(loc)}
+                          >{loc}</button>
+                        ))}
+                      </div>
+
+                      {pottyShowNote
+                        ? <input
+                            className="modal-input"
+                            placeholder="Add a note..."
+                            value={pottyNote}
+                            onChange={e => setPottyNote(e.target.value)}
+                          />
+                        : <button className="expand-toggle" onClick={() => setPottyShowNote(true)}>
+                            Add note
+                          </button>
+                      }
+
+                      <button
+                        className="action-button modal-save"
+                        onClick={() => {
+                          addEntry('Potty', `Catch · ${pottyLocation}`, undefined, pottyNote.trim())
+                          closeModal()
+                        }}
+                      >
+                        Save catch
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── Sleep modal ── */}
+              {activeModal === 'Sleep' && (
+                <div className="modal-body">
+                  {activeSleepStart ? (
+                    <>
+                      <div className="sleep-modal-timer">
+                        <span className="sleep-modal-label">Sleeping for</span>
+                        <span className="sleep-modal-duration">{sleepActiveLabel}</span>
+                      </div>
+
+                      {sleepShowNote
+                        ? <input
+                            className="modal-input"
+                            placeholder="Add a note..."
+                            value={sleepNote}
+                            onChange={e => setSleepNote(e.target.value)}
+                          />
+                        : <button className="expand-toggle" onClick={() => setSleepShowNote(true)}>
+                            Add note
+                          </button>
+                      }
+
+                      <button className="action-button modal-save sleep-end-btn" onClick={handleEndSleep}>
+                        End sleep
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="action-button modal-save" onClick={handleStartSleep}>
+                        Start sleep now
+                      </button>
+
+                      <button
+                        className="expand-toggle"
+                        onClick={() => setShowManualSleep(v => !v)}
+                        style={{ marginTop: '12px', display: 'block' }}
+                      >
+                        {showManualSleep ? 'Hide manual entry' : 'Enter times manually'}
+                      </button>
+
+                      {showManualSleep && (
+                        <div style={{ marginTop: '16px' }}>
+                          <div className="form-grid two-up">
+                            <label className="field">
+                              <span>Start</span>
+                              <input
+                                type="time"
+                                value={manualSleepStart}
+                                onChange={e => setManualSleepStart(e.target.value)}
+                              />
+                            </label>
+                            <label className="field">
+                              <span>End</span>
+                              <input
+                                type="time"
+                                value={manualSleepEnd}
+                                onChange={e => setManualSleepEnd(e.target.value)}
+                              />
+                            </label>
+                          </div>
+                          <input
+                            className="modal-input"
+                            placeholder="Note (optional)"
+                            value={sleepNote}
+                            onChange={e => setSleepNote(e.target.value)}
+                            style={{ marginTop: '12px' }}
+                          />
+                          <button
+                            className="action-button modal-save"
+                            onClick={handleManualSleep}
+                            disabled={!manualSleepStart || !manualSleepEnd}
+                            style={{ marginTop: '16px' }}
+                          >
+                            Save sleep
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── Growth modal ── */}
+              {activeModal === 'Growth' && (
+                <div className="modal-body">
+                  <div className="form-grid three-up" style={{ marginTop: 0 }}>
+                    <label className="field">
+                      <span>Weight (lb)</span>
+                      <input
+                        value={weight}
+                        onChange={e => setWeight(e.target.value)}
+                        placeholder="lb"
+                        type="number"
+                        min="0"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Weight (oz)</span>
+                      <input
+                        value={weightOz}
+                        onChange={e => setWeightOz(e.target.value)}
+                        placeholder="oz"
+                        type="number"
+                        min="0"
+                        max="15"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Height (in)</span>
+                      <input
+                        value={height}
+                        onChange={e => setHeight(e.target.value)}
+                        placeholder="in"
+                        type="number"
+                        min="0"
+                        step="0.25"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    className="action-button modal-save"
+                    onClick={handleSaveMetrics}
+                    disabled={!weight.trim() && !height.trim()}
+                    style={{ marginTop: '20px' }}
+                  >
+                    Save growth
+                  </button>
+                </div>
+              )}
+
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   )
 }
-
