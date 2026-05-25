@@ -141,13 +141,13 @@ export default function BabyTrackerApp(): JSX.Element {
     setLoading(false)
   }, [loading])
 
-  const updateEntry = useCallback((id: number, updates: Partial<Omit<Entry, 'id'>>): void => {
-    fetch(`/api/entries/${id}`, {
+  const updateEntry = useCallback((entry: Entry): void => {
+    fetch(`/api/entries/${entry.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
+      body: JSON.stringify(entry),
     }).then(() => setLoading(true))
-    setEntries(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e))
+    setEntries(prev => prev.map(e => e.id === entry.id ? entry : e))
   }, [])
 
   const deleteEntry = useCallback((id: number): void => {
@@ -246,7 +246,7 @@ export default function BabyTrackerApp(): JSX.Element {
     if (needsAmount && actualAmount) parts.push(`${actualAmount} oz`)
     const details = parts.join(' · ')
     if (editingEntry) {
-      updateEntry(editingEntry.id, { details, note: feedNote.trim(), created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+      updateEntry({ ...editingEntry, details, note: feedNote.trim(), created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
     } else {
       addEntry('Feeding', details, undefined, feedNote.trim())
     }
@@ -285,7 +285,7 @@ export default function BabyTrackerApp(): JSX.Element {
     const duration = formatDuration(startDate.getTime(), endDate.getTime())
     const details = `${manualSleepStart} – ${manualSleepEnd} · ${duration}`
     if (editingEntry) {
-      updateEntry(editingEntry.id, { details, note: sleepNote.trim(), created_at: startDate.toJSON() })
+      updateEntry({ ...editingEntry, details, note: sleepNote.trim(), created_at: startDate.toJSON() })
     } else {
       addEntry('Sleep', details, startDate.toJSON(), sleepNote.trim())
     }
@@ -305,7 +305,7 @@ export default function BabyTrackerApp(): JSX.Element {
     if (height.trim()) parts.push(`Height: ${height} in`)
     const details = parts.join(' · ')
     if (editingEntry) {
-      updateEntry(editingEntry.id, { details, note: editingEntry.note, created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+      updateEntry({ ...editingEntry, details, created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
     } else {
       addEntry('Growth', details)
     }
@@ -619,7 +619,7 @@ export default function BabyTrackerApp(): JSX.Element {
                         onClick={() => {
                           const details = `Catch · ${pottyLocation}`
                           if (editingEntry) {
-                            updateEntry(editingEntry.id, { details, note: pottyNote.trim(), created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+                            updateEntry({ ...editingEntry, details, note: pottyNote.trim(), created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
                           } else {
                             addEntry('Potty', details, undefined, pottyNote.trim())
                           }
@@ -635,7 +635,7 @@ export default function BabyTrackerApp(): JSX.Element {
                     <button
                       className="action-button modal-save"
                       onClick={() => {
-                        updateEntry(editingEntry.id, { details: pottyType, note: '', created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+                        updateEntry({ ...editingEntry, details: pottyType, note: '', created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
                         closeModal()
                       }}
                     >
