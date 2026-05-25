@@ -50,6 +50,29 @@ const formatDuration = (startMs: number, endMs: number): string => {
   return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
+const toDatetimeLocal = (d: Date): string => {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+const parseSleepDetails = (details: string): { start: string; end: string } => {
+  const timePart = details.split(' · ')[0]
+  const [s, e] = timePart.split(' – ')
+  const toHHMM = (str: string): string => {
+    const t = (str || '').trim()
+    const ampm = t.match(/^(\d+):(\d{2})\s*(AM|PM)$/i)
+    if (ampm) {
+      let h = parseInt(ampm[1])
+      const m = ampm[2], per = ampm[3].toUpperCase()
+      if (per === 'PM' && h !== 12) h += 12
+      if (per === 'AM' && h === 12) h = 0
+      return `${String(h).padStart(2, '0')}:${m}`
+    }
+    return /^\d{2}:\d{2}$/.test(t) ? t : ''
+  }
+  return { start: toHHMM(s), end: toHHMM(e) }
+}
+
 export default function BabyTrackerApp(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(true)
   const [entries, setEntries] = useState<Entry[]>([
@@ -91,6 +114,10 @@ export default function BabyTrackerApp(): JSX.Element {
   const [weightOz, setWeightOz] = useState<string>('')
   const [height, setHeight]     = useState<string>('')
 
+  // Edit state
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null)
+  const [editTime, setEditTime]         = useState<string>('')
+
   // Live timer tick (every 30s)
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 30000)
@@ -114,6 +141,20 @@ export default function BabyTrackerApp(): JSX.Element {
     setLoading(false)
   }, [loading])
 
+  const updateEntry = useCallback((id: number, updates: Partial<Omit<Entry, 'id'>>): void => {
+    fetch(`/api/entries/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }).then(() => setLoading(true))
+    setEntries(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e))
+  }, [])
+
+  const deleteEntry = useCallback((id: number): void => {
+    fetch(`/api/entries/${id}`, { method: 'DELETE' }).then(() => setLoading(true))
+    setEntries(prev => prev.filter(e => e.id !== id))
+  }, [])
+
   const addEntry = useCallback((
     type: EntryType,
     details: string,
@@ -136,6 +177,7 @@ export default function BabyTrackerApp(): JSX.Element {
   }, [])
 
   const openModal = useCallback((type: EntryType) => {
+    setEditingEntry(null)
     setFeedShowNote(false)
     setFeedNote('')
     setFeedAmount(4)
@@ -148,8 +190,50 @@ export default function BabyTrackerApp(): JSX.Element {
     setActiveModal(type)
   }, [])
 
+  const openEditModal = useCallback((entry: Entry): void => {
+    setFeedShowNote(false); setFeedNote(''); setFeedAmount(4); setFeedAmountCustom('')
+    setPottyType(null); setPottyShowNote(false); setPottyNote(''); setPottyLocation('Toilet')
+    setSleepNote(''); setSleepShowNote(false); setShowManualSleep(false)
+    setWeight(''); setWeightOz(''); setHeight('')
+
+    setEditingEntry(entry)
+    setEditTime(toDatetimeLocal(new Date(entry.created_at)))
+
+    if (entry.type === 'Feeding') {
+      const parts = entry.details.split(' · ')
+      setFeedType(parts[0] as FeedType)
+      if (parts[1]) {
+        const oz = parseFloat(parts[1])
+        if ((FEED_AMOUNTS as readonly number[]).includes(oz)) setFeedAmount(oz)
+        else { setFeedAmount(-1); setFeedAmountCustom(String(oz)) }
+      }
+      if (entry.note) { setFeedNote(entry.note); setFeedShowNote(true) }
+    } else if (entry.type === 'Potty') {
+      const parts = entry.details.split(' · ')
+      setPottyType(parts[0] as PottyType)
+      if (parts[1]) setPottyLocation(parts[1])
+      if (entry.note) { setPottyNote(entry.note); setPottyShowNote(true) }
+    } else if (entry.type === 'Sleep') {
+      const { start, end } = parseSleepDetails(entry.details)
+      setManualSleepStart(start)
+      setManualSleepEnd(end)
+      setShowManualSleep(true)
+      if (entry.note) { setSleepNote(entry.note); setSleepShowNote(true) }
+    } else if (entry.type === 'Growth') {
+      const wlb = entry.details.match(/Weight: (\d+) lb/)
+      const woz = entry.details.match(/lb (\d+) oz/)
+      const hin = entry.details.match(/Height: ([\d.]+) in/)
+      if (wlb) setWeight(wlb[1])
+      if (woz) setWeightOz(woz[1])
+      if (hin) setHeight(hin[1])
+    }
+
+    setActiveModal(entry.type)
+  }, [])
+
   const closeModal = useCallback(() => {
     setActiveModal(null)
+    setEditingEntry(null)
     setPottyType(null)
     setShowManualSleep(false)
   }, [])
@@ -160,7 +244,12 @@ export default function BabyTrackerApp(): JSX.Element {
     if (needsAmount && !actualAmount) return
     const parts: string[] = [feedType]
     if (needsAmount && actualAmount) parts.push(`${actualAmount} oz`)
-    addEntry('Feeding', parts.join(' · '), undefined, feedNote.trim())
+    const details = parts.join(' · ')
+    if (editingEntry) {
+      updateEntry(editingEntry.id, { details, note: feedNote.trim(), created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+    } else {
+      addEntry('Feeding', details, undefined, feedNote.trim())
+    }
     closeModal()
   }
 
@@ -188,13 +277,18 @@ export default function BabyTrackerApp(): JSX.Element {
     if (!manualSleepStart || !manualSleepEnd) return
     const [sh, sm] = manualSleepStart.split(':').map(Number)
     const [eh, em] = manualSleepEnd.split(':').map(Number)
-    const startDate = new Date()
+    const startDate = editingEntry && editTime ? new Date(editTime) : new Date()
     startDate.setHours(sh, sm, 0, 0)
-    const endDate = new Date()
+    const endDate = new Date(startDate)
     endDate.setHours(eh, em, 0, 0)
     if (endDate <= startDate) return
     const duration = formatDuration(startDate.getTime(), endDate.getTime())
-    addEntry('Sleep', `${manualSleepStart} – ${manualSleepEnd} · ${duration}`, startDate.toJSON(), sleepNote.trim())
+    const details = `${manualSleepStart} – ${manualSleepEnd} · ${duration}`
+    if (editingEntry) {
+      updateEntry(editingEntry.id, { details, note: sleepNote.trim(), created_at: startDate.toJSON() })
+    } else {
+      addEntry('Sleep', details, startDate.toJSON(), sleepNote.trim())
+    }
     setManualSleepStart('')
     setManualSleepEnd('')
     setSleepNote('')
@@ -209,7 +303,12 @@ export default function BabyTrackerApp(): JSX.Element {
       parts.push(`Weight: ${weight} lb${ozPart}`)
     }
     if (height.trim()) parts.push(`Height: ${height} in`)
-    addEntry('Growth', parts.join(' · '))
+    const details = parts.join(' · ')
+    if (editingEntry) {
+      updateEntry(editingEntry.id, { details, note: editingEntry.note, created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+    } else {
+      addEntry('Growth', details)
+    }
     setWeight('')
     setWeightOz('')
     setHeight('')
@@ -368,6 +467,10 @@ export default function BabyTrackerApp(): JSX.Element {
                   </div>
                   <div className="timeline-details">{entry.details}</div>
                   {entry.note ? <div className="timeline-note">{entry.note}</div> : null}
+                  <div className="timeline-actions">
+                    <button className="timeline-action-btn timeline-action-edit" onClick={() => openEditModal(entry)} aria-label="Edit entry">✎</button>
+                    <button className="timeline-action-btn timeline-action-delete" onClick={() => deleteEntry(entry.id)} aria-label="Delete entry">✕</button>
+                  </div>
                 </article>
               ))
             }
@@ -380,10 +483,10 @@ export default function BabyTrackerApp(): JSX.Element {
             <div className="modal-sheet" onClick={e => e.stopPropagation()}>
               <div className="modal-header">
                 <h2>
-                  {activeModal === 'Feeding' && 'Log feeding'}
-                  {activeModal === 'Potty'   && 'Log potty'}
-                  {activeModal === 'Sleep'   && (activeSleepStart ? 'Sleep timer' : 'Log sleep')}
-                  {activeModal === 'Growth'  && 'Log growth'}
+                  {activeModal === 'Feeding' && (editingEntry ? 'Edit feeding' : 'Log feeding')}
+                  {activeModal === 'Potty'   && (editingEntry ? 'Edit potty'   : 'Log potty')}
+                  {activeModal === 'Sleep'   && (activeSleepStart ? 'Sleep timer' : editingEntry ? 'Edit sleep' : 'Log sleep')}
+                  {activeModal === 'Growth'  && (editingEntry ? 'Edit growth'  : 'Log growth')}
                 </h2>
                 <button className="modal-close" onClick={closeModal} aria-label="Close">✕</button>
               </div>
@@ -391,6 +494,12 @@ export default function BabyTrackerApp(): JSX.Element {
               {/* ── Feed modal ── */}
               {activeModal === 'Feeding' && (
                 <div className="modal-body">
+                  {editingEntry && (
+                    <label className="field edit-time-field">
+                      <span>Time</span>
+                      <input type="datetime-local" value={editTime} onChange={e => setEditTime(e.target.value)} />
+                    </label>
+                  )}
                   <span className="chip-label">Type</span>
                   <div className="chip-group">
                     {FEED_TYPES.map(t => (
@@ -449,7 +558,7 @@ export default function BabyTrackerApp(): JSX.Element {
                     onClick={handleAddFeed}
                     disabled={feedSaveDisabled}
                   >
-                    Save feeding
+                    {editingEntry ? 'Update feeding' : 'Save feeding'}
                   </button>
                 </div>
               )}
@@ -457,6 +566,12 @@ export default function BabyTrackerApp(): JSX.Element {
               {/* ── Potty modal ── */}
               {activeModal === 'Potty' && (
                 <div className="modal-body">
+                  {editingEntry && (
+                    <label className="field edit-time-field">
+                      <span>Time</span>
+                      <input type="datetime-local" value={editTime} onChange={e => setEditTime(e.target.value)} />
+                    </label>
+                  )}
                   <span className="chip-label">What happened?</span>
                   <div className="chip-group potty-chips">
                     {POTTY_TYPES.map(t => (
@@ -465,7 +580,7 @@ export default function BabyTrackerApp(): JSX.Element {
                         className={`chip${pottyType === t ? ' selected' : ''}`}
                         onClick={() => {
                           setPottyType(t)
-                          if (t !== 'Catch') {
+                          if (t !== 'Catch' && !editingEntry) {
                             addEntry('Potty', t)
                             closeModal()
                           }
@@ -502,13 +617,30 @@ export default function BabyTrackerApp(): JSX.Element {
                       <button
                         className="action-button modal-save"
                         onClick={() => {
-                          addEntry('Potty', `Catch · ${pottyLocation}`, undefined, pottyNote.trim())
+                          const details = `Catch · ${pottyLocation}`
+                          if (editingEntry) {
+                            updateEntry(editingEntry.id, { details, note: pottyNote.trim(), created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+                          } else {
+                            addEntry('Potty', details, undefined, pottyNote.trim())
+                          }
                           closeModal()
                         }}
                       >
-                        Save catch
+                        {editingEntry ? 'Update catch' : 'Save catch'}
                       </button>
                     </>
+                  )}
+
+                  {editingEntry && pottyType && pottyType !== 'Catch' && (
+                    <button
+                      className="action-button modal-save"
+                      onClick={() => {
+                        updateEntry(editingEntry.id, { details: pottyType, note: '', created_at: editTime ? new Date(editTime).toJSON() : editingEntry.created_at })
+                        closeModal()
+                      }}
+                    >
+                      Update potty
+                    </button>
                   )}
                 </div>
               )}
@@ -516,6 +648,12 @@ export default function BabyTrackerApp(): JSX.Element {
               {/* ── Sleep modal ── */}
               {activeModal === 'Sleep' && (
                 <div className="modal-body">
+                  {!activeSleepStart && editingEntry && (
+                    <label className="field edit-time-field">
+                      <span>Date</span>
+                      <input type="datetime-local" value={editTime} onChange={e => setEditTime(e.target.value)} />
+                    </label>
+                  )}
                   {activeSleepStart ? (
                     <>
                       <div className="sleep-modal-timer">
@@ -586,7 +724,7 @@ export default function BabyTrackerApp(): JSX.Element {
                             disabled={!manualSleepStart || !manualSleepEnd}
                             style={{ marginTop: '16px' }}
                           >
-                            Save sleep
+                            {editingEntry ? 'Update sleep' : 'Save sleep'}
                           </button>
                         </div>
                       )}
@@ -598,6 +736,12 @@ export default function BabyTrackerApp(): JSX.Element {
               {/* ── Growth modal ── */}
               {activeModal === 'Growth' && (
                 <div className="modal-body">
+                  {editingEntry && (
+                    <label className="field edit-time-field">
+                      <span>Time</span>
+                      <input type="datetime-local" value={editTime} onChange={e => setEditTime(e.target.value)} />
+                    </label>
+                  )}
                   <div className="form-grid three-up" style={{ marginTop: 0 }}>
                     <label className="field">
                       <span>Weight (lb)</span>
@@ -638,7 +782,7 @@ export default function BabyTrackerApp(): JSX.Element {
                     disabled={!weight.trim() && !height.trim()}
                     style={{ marginTop: '20px' }}
                   >
-                    Save growth
+                    {editingEntry ? 'Update growth' : 'Save growth'}
                   </button>
                 </div>
               )}
