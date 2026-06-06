@@ -1,12 +1,13 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import './App.css'
 import type { JSX } from 'react/jsx-runtime'
+import { InsightsCard } from './InsightsCard'
 
-type EntryType = 'Feeding' | 'Potty' | 'Sleep' | 'Growth'
+export type EntryType = 'Feeding' | 'Potty' | 'Sleep' | 'Growth'
 type FeedType = 'Bottle' | 'Breastfeeding' | 'Formula' | 'Solid Food'
 type PottyType = 'Wet' | 'Dirty' | 'Both' | 'Blowout' | 'Catch'
 
-interface Entry {
+export interface Entry {
   id: number
   type: EntryType
   created_at: string
@@ -476,6 +477,8 @@ export default function BabyTrackerApp(): JSX.Element {
             }
           </div>
         </aside>
+
+        <InsightsCard entries={entries} />
 
         {/* Modal */}
         {activeModal !== null && (
